@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-Vkoo8x4CGsO3+Hhxv8T/Q5PaXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh" crossorigin="anonymous">
+  <title>Websockets</title>
+  <style>
+    body {
+      background-color: #333;
+      color: #eee;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="col col-md-6 offset-md-3">
+      <h1>Websocket Chat</h1>
+      <div class="form-group" id="loginUserContainer">
+        <label for="userName">User Name</label>
+        <input id="userName" placeholder="Enter your name" class="form-control" type="text" required /><br />
+        <button id="loginBtn" class="btn btn-primary">Set User</button>
+      </div>
+
+      <div class="form-group invisible" id="messagingContainer">
+        <textarea rows="10" id="messageFeed" class="form-control bg-dark text-white" disabled></textarea><br />
+        <textarea id="messageBox" class="form-control" placeholder="Enter a message to send"></textarea><br />
+        <button id="msgSendBtn" class="btn btn-primary">Send</button>
+      </div>
+    </div>
+  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    var reconnectTimeout;
+    var userNameValue;
+    var socket = io();
+    socket.on('disconnect', (reason) => {
+      console.log(reason);
+      if (reason === 'transport close') {
+        console.log('server has disconnected. will try to reconnect...')
+        // the disconnection was initiated by the server, you need to reconnect manually
+        reconnectTimeout = setInterval(() => {
+          socket.connect();
+        }, 1000);
+      }
+      // else the socket will automatically try to reconnect
+      socket.off('message-all');
+    });
+
+    socket.on('data', function(msg){
+      console.log(msg);
+    });
+
+    socket.on('connected', function(msg) {
+      clearInterval(reconnectTimeout);
+      const loginUserContainer = document.getElementById('loginUserContainer');
+      const messagingContainer = document.getElementById('messagingContainer');
+      const login = document.getElementById('loginBtn');
+      const userNameEl = document.getElementById('userName');
+      // const passwordEl = document.getElementById('password');
+
+      const messageFeedEl = document.getElementById('messageFeed');
+      const messageBoxEl = document.getElementById('messageBox');
+      const msgSendBtnEl = document.getElementById('msgSendBtn');
+
+      function sendMessage() {
+        if (userNameValue) {
+          socket.emit('message-all', {
+            from: userNameEl.value,
+            message: messageBoxEl.value,
+          });
+          messageBoxEl.value = '';
+        } else {
+          messageFeedEl.value = 'No user name set.'
+        }
+      }
+
+      messageBox.addEventListener('keyup', (e) => {
+        if (e.keyCode === 13) {
+          sendMessage();
+        }
+      });
+      login.onclick = () => {
+        userNameValue = userNameEl.value;
+        socket.emit('login', { userName: userNameEl.value });
+        loginUserContainer.parentElement.removeChild(loginUserContainer);
+        messagingContainer.classList.remove('invisible');
+      };
+
+      msgSendBtnEl.onclick = () => {
+        sendMessage();
+      };
+
+      socket.on('message-all', function(msg) {
+        console.log(msg);
+        messageFeedEl.value += `\n${msg.from}> ${msg.message}`;
+        messageFeedEl.scrollTo(0, messageFeedEl.scrollHeight);
+      });
+    });
+  </script>
+</body>
+</html>
