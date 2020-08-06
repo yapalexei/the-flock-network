@@ -2,20 +2,22 @@ const { v4: uuid } = require('uuid');
 const app = require('express')();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
+const PROJECTILE_LIFETIME = 5000;
+const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.02;
+const PROJECTILE_HIT_DISTANCE = 0.00000015;
+const FPS = 30;
+const ROBOTS = 1000;
 
 console.reset = function () {
   return process.stdout.write('\033c');
 }
 
-const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.02;
-const HIT_DISTANCE = 0.00000001;
-const FPS = 30;
-const ROBOTS = 100;
-
 let batchTimer = null;
 const gameData = {
   objectsById: {},
 };
+const socketConnections = {};
+
 let lastMsgTime = 0;
 let isIdle = false;
 
@@ -24,12 +26,14 @@ http.listen(3001, function(){
 });
 
 io.on('connection', function(socket) {
+  socketConnections[socket.id] = socket;
   console.log('New Player ID:', socket.id);
   socket.emit('connected', socket.id);
 
   socket.on('disconnect', function (msg) {
     io.emit('object removed', socket.id);
     delete gameData.objectsById[socket.id];
+    delete socketConnections[socket.id];
   });
 
   socket.on('message', (msg) => {
@@ -45,7 +49,7 @@ io.on('connection', function(socket) {
 
 function generateAIPlayers() {
   let count = ROBOTS;
-  const offset = 0.02;
+  const offset = 0.1;
   const fighters = ['vultureDroid', 'tieFighter', 'tie1', 'tie2', 'tie3', 'tie4'];
   if (!count) return;
   do {
@@ -62,7 +66,7 @@ function generateAIPlayers() {
         x: -122.67399123828811 + xOffset,
         y: 45.53044800949424 + yOffset
       },
-      speed: 0.001 + ((Math.random() - 0.5) * 0.001),
+      speed: 0.002 + ((Math.random() - 0.5) * 0.002),
       velocity: {
         x: 0,
         y: 0,
@@ -98,12 +102,6 @@ function findClosestPlayerWithinRadius(craftObjs, radius = 0.00001) {
   });
 }
 
-function calcDistance(p1, p2) {
-  const x = p2.x - p1.x;
-  const y = p2.y - p1.y;
-  return Math.hypot(x*x, y*y);
-}
-
 function animateRobotPlayers(allObj) {
   allObj.map((robot) => {
     if (!robot.isRobot) return;
@@ -126,8 +124,6 @@ function animateRobotPlayers(allObj) {
         robot.pos.y = newPos[1];
       }
     } else {
-      // robot.pos.x += (Math.random() - 0.5) * 0.0001;
-      // robot.pos.y += (Math.random() - 0.5) * 0.0001;
       robot.bearing = robot.prevPos ? calcBearing(robot.prevPos.x, robot.prevPos.y, robot.pos.x, robot.pos.y) : 0;
     }
   });
@@ -153,22 +149,24 @@ function removeExpiredObjects(allObj) {
   gameData.objectsById = allObj.reduce((sum, item) => {
     if (!gameData.objectsById[item.id]) return sum;
 
-    // if (gameData.objectsById[item.id].isRobot && gameData.objectsById[item.id].time === -1) {
+    if (item.isPlayer && !item.expired) {
+      sum[item.id] = item;
+      return sum;
+    }
 
-    if (item.closestProjectile && item.closestProjectile.distance < HIT_DISTANCE && !item.expired) {
+    if (item.closestProjectile && item.closestProjectile.distance < PROJECTILE_HIT_DISTANCE && !item.expired) {
       item.closestProjectile.obj.expired = now;
       item.expired = now;
       sum[item.closestProjectile.obj.id] = item.closestProjectile.obj;
       sum[item.id] = item;
       return sum;
     }
-    // }
 
-    if ((now - item.expired) > 50) {
+    if ((now - item.expired) > 150) {
       return sum;
     }
 
-    if (gameData.objectsById[item.id].isProjectile && now - gameData.objectsById[item.id].time < 1000) {
+    if (gameData.objectsById[item.id].isProjectile && now - gameData.objectsById[item.id].time < PROJECTILE_LIFETIME) {
       sum[item.id] = item;
       return sum;
     };
@@ -219,11 +217,24 @@ function updateObjects() {
   updateCraftHitPoints(craftObjs, projectiles);
   removeExpiredObjects(allObj); // must be last
   const res = process.hrtime(startOfLoop);
+
   console.reset();
   console.info('Loop time: %dms', res[1] / 1000000);
   console.info('Players: %d', playerObjs.length);
   console.info('Robots: %d', robotObjs.length);
   console.info('Projectiles: %d', projectiles.length);
+}
+
+function filterOutTooFar(player, allObs) {
+  const radius = 0.0001;
+  return allObs.reduce((sum, obj) => {
+    if (!player || obj.id === player.id) return sum;
+    const dist = calcDistance(player.pos, obj.pos);
+    if (dist < radius) {
+      sum[obj.id] = obj;
+    };
+    return sum;
+  }, {});
 }
 
 function renderLoop() {
@@ -233,8 +244,14 @@ function renderLoop() {
     isIdle = true;
     clearInterval(batchTimer);
   }
+  const allObs = Object.values(gameData.objectsById);
   if (Object.keys(gameData.objectsById).length) {
-    io.emit('message-all', { ...gameData.objectsById });
+    Object.keys(socketConnections).forEach((id) => {
+      if (gameData.objectsById[id]) {
+        const res = filterOutTooFar(gameData.objectsById[id], allObs);
+        socketConnections[id].emit('message-all', res);
+      }
+    });
   }
 }
 
@@ -247,6 +264,12 @@ function initTimer() {
 
 function toDeg(rad) {
   return rad * 180 / Math.PI;
+}
+
+function calcDistance(p1, p2) {
+  const x = p2.x - p1.x;
+  const y = p2.y - p1.y;
+  return Math.hypot(x*x, y*y);
 }
 
 function calcBearing(lat1,lng1,lat2,lng2) {
