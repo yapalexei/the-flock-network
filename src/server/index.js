@@ -3,7 +3,7 @@ const app = require('express')();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
-const PRINT_STATS_TO_CONSOLE = process.env.PRINT_STATS_TO_CONSOLE || 'true';
+const PRINT_STATS_TO_CONSOLE = process.env.PRINT_STATS_TO_CONSOLE || 'false';
 const PORT = process.env.PORT || 3001;
 const FPS = process.env.FPS || 30;
 const ROBOTS = process.env.ROBOTS || 100;
@@ -11,7 +11,7 @@ const HIDE_OBJS_PAST_RADIUS = process.env.HIDE_OBJS_PAST_RADIUS || 0.0001;
 
 const PROJECTILE_LIFETIME = 5000;
 const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.02;
-const PROJECTILE_HIT_DISTANCE = 0.00000015;
+const PROJECTILE_HIT_DISTANCE = 0.00000005;
 
 console.reset = function () {
   return process.stdout.write('\033c');
@@ -44,14 +44,8 @@ io.on('connection', function(socket) {
   });
 
   socket.on('reset game', (msg) => {
-    const now = Date.now();
     console.log('game reset triggered by:', socket.id);
     gameData.objectsById = {};
-    // Object.keys(gameData.objectsById).forEach((obj) => {
-    //   if (obj.isRobot) {
-    //     obj.expired = now;
-    //   }
-    // });
     setTimeout(() => {
       console.log('initiating reset', msg);
       if (msg && msg.robots && typeof msg.robots === 'number' && msg.robots >= 0 && msg.robots < 5000) {
@@ -67,7 +61,15 @@ io.on('connection', function(socket) {
       lastMsgTime = Date.now();
       isIdle = false;
       Object.keys(msg).map((key) => {
-        gameData.objectsById[key] = msg[key];
+        if (gameData.objectsById[key]) {
+          const { statistics } = gameData.objectsById[key];
+          gameData.objectsById[key] = {
+            ...msg[key],
+            statistics,
+          };
+        } else {
+          gameData.objectsById[key] = msg[key];
+        }
       });
     }
   });
@@ -77,7 +79,7 @@ io.on('connection', function(socket) {
 
 function generateAIPlayers(robots = ROBOTS) {
   let count = robots;
-  const offset = 0.1;
+  const offset = 0.01;
   const fighters = ['vultureDroid', 'tieFighter', 'tie1', 'tie2', 'tie3', 'tie4'];
   if (!count) return;
   do {
@@ -100,8 +102,13 @@ function generateAIPlayers(robots = ROBOTS) {
         y: 0,
       },
       icon: fighters[fighterIndex],
-      'icon-size': 0.6,
+      'icon-size': 0.5,
       time: -1,
+      hitCapacity: 5,
+      statistics: {
+        hitCount: 0,
+        kills: 0,
+      }
     }
     count -= 1;
   } while (count > 0)
@@ -111,12 +118,6 @@ function findClosestPlayerWithinRadius(craftObjs, radius = 0.00001) {
   const robots = craftObjs.filter((obj) => obj.isRobot);
   const players = craftObjs.filter((obj) => !obj.isRobot && obj.isProjectile !== 'true');
   robots.forEach((craft) => {
-    if (craft.closestProjectile) {
-      if (!gameData.objectsById[craft.closestProjectile.obj.id]) {
-        craft.closestProjectile = null;
-      }
-    }
-
     players.forEach((player) => {
       if (player && craft && player.id !== craft.id && player.pos) {
         const distance = calcDistance(player.pos, craft.pos);
@@ -175,36 +176,16 @@ function animateProjectiles(projectiles) {
 function removeExpiredObjects(allObj) {
   const now = Date.now();
   gameData.objectsById = allObj.reduce((sum, item) => {
-    if ((now - item.expired) > 150) {
-      return sum;
-    }
-
-    if (!gameData.objectsById[item.id]) return sum;
-
-    if (item.isPlayer && !item.expired) {
-      sum[item.id] = item;
-      return sum;
-    }
-
-    if (item.closestProjectile && item.closestProjectile.distance < PROJECTILE_HIT_DISTANCE && !item.expired) {
-      item.closestProjectile.obj.expired = now;
-      item.expired = now;
-      sum[item.closestProjectile.obj.id] = item.closestProjectile.obj;
-      sum[item.id] = item;
-      return sum;
-    }
 
     if (gameData.objectsById[item.id].isProjectile && now - gameData.objectsById[item.id].time < PROJECTILE_LIFETIME) {
       sum[item.id] = item;
       return sum;
     };
-    if (gameData.objectsById[item.id].time === -1) {
-      sum[item.id] = item;
+
+    if (item.expired && (now - item.expired) > 500) {
       return sum;
-    }
-    if (now - gameData.objectsById[item.id].time < 1000) {
+    } else {
       sum[item.id] = item;
-      return sum;
     }
 
     return sum;
@@ -212,20 +193,26 @@ function removeExpiredObjects(allObj) {
 }
 
 function updateCraftHitPoints(craftObjs, projectiles) {
+  const now = Date.now();
   craftObjs.forEach((craft) => {
-    if (craft.isRobot && !craft.expired) {
+    if (!craft.expired) {
       projectiles.forEach((projectile) => {
+        if (projectile.expired) return;
+        const playerObj = gameData.objectsById[projectile.ownerId];
+        if (!playerObj) return;
+        if (projectile.ownerId === craft.id) return;
+        if (!playerObj.statistics) playerObj.statistics = {};
+        if (!playerObj.statistics.kills) playerObj.statistics.kills = 0;
         const dist = calcDistance(craft.pos, projectile.pos);
-        if (craft.closestProjectile && craft.closestProjectile.distance > dist) {
-          craft.closestProjectile = {
-            distance: dist,
-            obj: projectile,
-          };
-        } else {
-          craft.closestProjectile = {
-            distance: dist,
-            obj: projectile,
-          };
+
+        if (dist < PROJECTILE_HIT_DISTANCE) {
+          projectile.expired = now
+          craft.statistics.hitCount += projectile.hitValue || 1;
+          if (craft.statistics.hitCount >= craft.hitCapacity) {
+            if (!playerObj.statistics.kills) playerObj.statistics.kills = 0
+            playerObj.statistics.kills += 1;
+            craft.expired = now;
+          }
         }
       });
     }
@@ -254,7 +241,7 @@ function updateObjects() {
     gameData.printTime = null;
     console.reset();
     console.info({PORT, FPS, ROBOTS});
-    console.info('Loop time: %dms', res);
+    // console.info('Loop time: %dms', res);
     console.info('Players: %d', playerObjs.length);
     console.info('Robots: %d', robotObjs.length);
     console.info('Projectiles: %d', projectiles.length);
@@ -263,7 +250,7 @@ function updateObjects() {
 
 function filterOutTooFar(player, allObs) {
   return allObs.reduce((sum, obj) => {
-    if (!player || obj.id === player.id) return sum;
+    // if (!player || obj.id === player.id) return sum;
     const dist = calcDistance(player.pos, obj.pos);
     if (dist < HIDE_OBJS_PAST_RADIUS) {
       sum[obj.id] = obj;
