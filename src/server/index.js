@@ -1,16 +1,19 @@
 const { v4: uuid } = require('uuid');
+const e = require('express');
 const app = require('express')();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
-const PRINT_STATS_TO_CONSOLE = process.env.PRINT_STATS_TO_CONSOLE || 'false';
+const PRINT_STATS_TO_CONSOLE = process.env.PRINT_STATS_TO_CONSOLE || 0;
 const PORT = process.env.PORT || 3001;
 const FPS = process.env.FPS || 30;
-const ROBOTS = process.env.ROBOTS || 100;
+const ROBOTS = process.env.ROBOTS || 500;
 const HIDE_OBJS_PAST_RADIUS = process.env.HIDE_OBJS_PAST_RADIUS || 0.0001;
+const ROBOT_SPAWN_PLACEMENT_OFFSET = process.env.ROBOT_SPAWN_PLACEMENT_OFFSET || 0.3;
+const ENABLE_ENEMY_SHOOTING = process.env.ENABLE_ENEMY_SHOOTING || 1
 
 const PROJECTILE_LIFETIME = 5000;
-const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.02;
+const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.05;
 const PROJECTILE_HIT_DISTANCE = 0.00000005;
 
 console.reset = function () {
@@ -20,6 +23,7 @@ console.reset = function () {
 let batchTimer = null;
 const gameData = {
   objectsById: {},
+  robotProjectiles: {},
 };
 const socketConnections = {};
 
@@ -79,8 +83,11 @@ io.on('connection', function(socket) {
 
 function generateAIPlayers(robots = ROBOTS) {
   let count = robots;
-  const offset = 0.01;
-  const fighters = ['vultureDroid', 'tieFighter', 'tie1', 'tie2', 'tie3', 'tie4'];
+  const offset = ROBOT_SPAWN_PLACEMENT_OFFSET;
+  const fighters = [
+    'vultureDroid', 'tieFighter', 'tie1', 'tie2', 'tie3', 'tie4',
+    // 'xWing', 'xWing1', 'xWing2', 'yWing',
+  ];
   if (!count) return;
   do {
     const random = Math.random();
@@ -108,30 +115,31 @@ function generateAIPlayers(robots = ROBOTS) {
       statistics: {
         hitCount: 0,
         kills: 0,
+        fireCount: 0,
       }
     }
     count -= 1;
   } while (count > 0)
 }
 
-function findClosestPlayerWithinRadius(craftObjs, radius = 0.00001) {
+function findClosestPlayerWithinRadius(craftObjs, radius = 0.0001) {
   const robots = craftObjs.filter((obj) => obj.isRobot);
   const players = craftObjs.filter((obj) => !obj.isRobot && obj.isProjectile !== 'true');
   robots.forEach((craft) => {
+    craft.closestPlayer = null;
     players.forEach((player) => {
       if (player && craft && player.id !== craft.id && player.pos) {
         const distance = calcDistance(player.pos, craft.pos);
         if (distance < radius) {
           craft.closestPlayer = player.id;
-        } else {
-          craft.closestPlayer = null; // when too far
         }
       }
     });
   });
 }
-
+const TIME_BETWEEN_FIRE = 1000;
 function animateRobotPlayers(allObj) {
+  const now = Date.now();
   allObj.map((robot) => {
     if (!robot.isRobot) return;
     if (robot.expired) return;
@@ -151,6 +159,31 @@ function animateRobotPlayers(allObj) {
 
         robot.pos.x = newPos[0];
         robot.pos.y = newPos[1];
+
+        if (ENABLE_ENEMY_SHOOTING) {
+          if (
+            !robot.statistics.roundShotAt ||
+            robot.statistics.roundShotAt &&
+            (now - robot.statistics.roundShotAt) > TIME_BETWEEN_FIRE
+          ) {
+            robot.statistics.fireCount += 1;
+            robot.statistics.roundShotAt = now;
+
+            const projectile = {
+              id: robot.id + robot.statistics.roundShotAt,
+              pos: {...robot.pos},
+              prevPos: {...robot.pos},
+              icon: 'dot-11',
+              isProjectile: 'true',
+              bearing: robot.bearing + ((Math.random() - 0.5) * 0.005) || 0,
+              hitValue: 1,
+              robotProjectile: 'true',
+              ownerId: robot.id,
+              time: now,
+            };
+            gameData.robotProjectiles[projectile.id] = projectile;
+          }
+        }
       }
     } else {
       robot.bearing = robot.prevPos ? calcBearing(robot.prevPos.x, robot.prevPos.y, robot.pos.x, robot.pos.y) : 0;
@@ -176,8 +209,8 @@ function animateProjectiles(projectiles) {
 function removeExpiredObjects(allObj) {
   const now = Date.now();
   gameData.objectsById = allObj.reduce((sum, item) => {
-
-    if (gameData.objectsById[item.id].isProjectile && now - gameData.objectsById[item.id].time < PROJECTILE_LIFETIME) {
+    if (item.isProjectile && !item.expired && now - item.time > PROJECTILE_LIFETIME) {
+      item.expired = now;
       sum[item.id] = item;
       return sum;
     };
@@ -230,14 +263,15 @@ function updateObjects() {
   const robotObjs = allObj.filter(obj => obj.isRobot);
   const projectiles = allObj.filter(obj => obj.isProjectile);
 
+  // const robotProjectiles = allObj.filter(obj => obj.robotProjectile);
   findClosestPlayerWithinRadius(craftObjs);
   animateRobotPlayers(craftObjs);
   animateProjectiles(projectiles);
   updateCraftHitPoints(craftObjs, projectiles);
   removeExpiredObjects(allObj); // must be last
-  const res = process.hrtime(gameData.printTime)[1] / 1000000;
 
-  if (PRINT_STATS_TO_CONSOLE === 'true' && ~~res > 900) {
+  const res = process.hrtime(gameData.printTime)[1] / 1000000;
+  if (PRINT_STATS_TO_CONSOLE && ~~res > 900) {
     gameData.printTime = null;
     console.reset();
     console.info({PORT, FPS, ROBOTS});
@@ -246,11 +280,16 @@ function updateObjects() {
     console.info('Robots: %d', robotObjs.length);
     console.info('Projectiles: %d', projectiles.length);
   }
+
+  gameData.objectsById = {
+    ...gameData.objectsById,
+    ...gameData.robotProjectiles,
+  };
+  gameData.robotProjectiles = {};
 }
 
 function filterOutTooFar(player, allObs) {
   return allObs.reduce((sum, obj) => {
-    // if (!player || obj.id === player.id) return sum;
     const dist = calcDistance(player.pos, obj.pos);
     if (dist < HIDE_OBJS_PAST_RADIUS) {
       sum[obj.id] = obj;
@@ -280,7 +319,17 @@ function renderLoop() {
 function initTimer() {
   if (batchTimer) return;
   batchTimer = setInterval(renderLoop, 1000 / FPS);
+  console.log('PORT', PORT);
+  console.log('FPS', FPS);
+  console.log('ROBOTS', ROBOTS);
+  console.log('HIDE_OBJS_PAST_RADIUS', HIDE_OBJS_PAST_RADIUS);
+  console.log('ROBOT_SPAWN_PLACEMENT_OFFSET', ROBOT_SPAWN_PLACEMENT_OFFSET);
+  console.log('ENABLE_ENEMY_SHOOTING', ENABLE_ENEMY_SHOOTING);
+  console.log('PROJECTILE_LIFETIME', PROJECTILE_LIFETIME);
+  console.log('PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME', PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME);
+  console.log('PROJECTILE_HIT_DISTANCE', PROJECTILE_HIT_DISTANCE);
   console.log('PRINT_STATS_TO_CONSOLE', PRINT_STATS_TO_CONSOLE);
+
   generateAIPlayers();
 }
 

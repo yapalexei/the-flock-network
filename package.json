@@ -4,7 +4,8 @@
   "description": "",
   "main": "./src/index.js",
   "scripts": {
-    "docker": "docker-compose up --build",
+    "docker:build": "docker-compose up --build",
+    "docker": "docker-compose up",
     "start": "node ./src/server/index.js"
   },
   "author": "",
