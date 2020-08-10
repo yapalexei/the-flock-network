@@ -4,17 +4,18 @@ const app = require('express')();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
-const PRINT_STATS_TO_CONSOLE = process.env.PRINT_STATS_TO_CONSOLE || 0;
+const PRINT_STATS_TO_CONSOLE = process.env.PRINT_STATS_TO_CONSOLE || 1;
 const PORT = process.env.PORT || 3001;
-const FPS = process.env.FPS || 30;
-const ROBOTS = process.env.ROBOTS || 500;
+const FPS = process.env.FPS || 40;
+const ROBOTS = process.env.ROBOTS || 5000;
 const HIDE_OBJS_PAST_RADIUS = process.env.HIDE_OBJS_PAST_RADIUS || 0.0001;
-const ROBOT_SPAWN_PLACEMENT_OFFSET = process.env.ROBOT_SPAWN_PLACEMENT_OFFSET || 0.3;
-const ENABLE_ENEMY_SHOOTING = process.env.ENABLE_ENEMY_SHOOTING || 1
+const ROBOT_SPAWN_PLACEMENT_OFFSET = process.env.ROBOT_SPAWN_PLACEMENT_OFFSET || 0.06;
+const ENABLE_ENEMY_SHOOTING = process.env.ENABLE_ENEMY_SHOOTING || 0
 
 const PROJECTILE_LIFETIME = 5000;
 const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.05;
 const PROJECTILE_HIT_DISTANCE = 0.00000005;
+const TIME_BETWEEN_FIRE = 1000;
 
 console.reset = function () {
   return process.stdout.write('\033c');
@@ -24,6 +25,9 @@ let batchTimer = null;
 const gameData = {
   objectsById: {},
   robotProjectiles: {},
+  frames: 0,
+  startOfPeriod: null,
+  totalSm: 0,
 };
 const socketConnections = {};
 
@@ -39,7 +43,7 @@ http.listen(PORT, HOST, function(){
 io.on('connection', function(socket) {
   socketConnections[socket.id] = socket;
   console.log('New Player ID:', socket.id);
-  socket.emit('connected', socket.id);
+  socket.emit('connected', { id: socket.id, fps: FPS });
 
   socket.on('disconnect', function (msg) {
     io.emit('object removed', socket.id);
@@ -85,8 +89,7 @@ function generateAIPlayers(robots = ROBOTS) {
   let count = robots;
   const offset = ROBOT_SPAWN_PLACEMENT_OFFSET;
   const fighters = [
-    'vultureDroid', 'tieFighter', 'tie1', 'tie2', 'tie3', 'tie4',
-    // 'xWing', 'xWing1', 'xWing2', 'yWing',
+    'tieFighter', 'tie1', 'tie2', 'tie3', 'tie4',
   ];
   if (!count) return;
   do {
@@ -109,7 +112,7 @@ function generateAIPlayers(robots = ROBOTS) {
         y: 0,
       },
       icon: fighters[fighterIndex],
-      'icon-size': 0.5,
+      'icon-size': 0.4,
       time: -1,
       hitCapacity: 5,
       statistics: {
@@ -122,13 +125,11 @@ function generateAIPlayers(robots = ROBOTS) {
   } while (count > 0)
 }
 
-function findClosestPlayerWithinRadius(craftObjs, radius = 0.0001) {
-  const robots = craftObjs.filter((obj) => obj.isRobot);
-  const players = craftObjs.filter((obj) => !obj.isRobot && obj.isProjectile !== 'true');
+function findClosestPlayerWithinRadius(robots, players, radius = 0.00005) {
   robots.forEach((craft) => {
     craft.closestPlayer = null;
     players.forEach((player) => {
-      if (player && craft && player.id !== craft.id && player.pos) {
+      if (player && craft && !player.expired && player.id !== craft.id && player.pos) {
         const distance = calcDistance(player.pos, craft.pos);
         if (distance < radius) {
           craft.closestPlayer = player.id;
@@ -137,11 +138,10 @@ function findClosestPlayerWithinRadius(craftObjs, radius = 0.0001) {
     });
   });
 }
-const TIME_BETWEEN_FIRE = 1000;
+
 function animateRobotPlayers(allObj) {
   const now = Date.now();
   allObj.map((robot) => {
-    if (!robot.isRobot) return;
     if (robot.expired) return;
     if (!robot.prevPos) robot.prevPos = {};
     robot.prevPos.x = robot.pos.x;
@@ -149,7 +149,7 @@ function animateRobotPlayers(allObj) {
 
     if (robot.closestPlayer) {
       const closestPlayer = gameData.objectsById[robot.closestPlayer];
-      if (closestPlayer) {
+      if (closestPlayer && !closestPlayer.expired) {
         const calculatedBearing = calcBearing(robot.pos.x, robot.pos.y, closestPlayer.pos.x, closestPlayer.pos.y);
         const bearingDiff = calculatedBearing - robot.bearing;
         const newBearing = bearingDiff > 5 ? robot.bearing + 5 : calculatedBearing;
@@ -175,7 +175,7 @@ function animateRobotPlayers(allObj) {
               prevPos: {...robot.pos},
               icon: 'dot-11',
               isProjectile: 'true',
-              bearing: robot.bearing + ((Math.random() - 0.5) * 0.005) || 0,
+              bearing: robot.bearing + ((Math.random() - 0.5) * 0.01) || 0,
               hitValue: 1,
               robotProjectile: 'true',
               ownerId: robot.id,
@@ -253,10 +253,6 @@ function updateCraftHitPoints(craftObjs, projectiles) {
 }
 
 function updateObjects() {
-  const startOfLoop = process.hrtime();
-  if (!gameData.printTime) {
-    gameData.printTime = startOfLoop;
-  }
   const allObj = Object.values(gameData.objectsById);
   const craftObjs = allObj.filter(obj => !obj.isProjectile);
   const playerObjs = allObj.filter(obj => obj.isPlayer);
@@ -264,28 +260,18 @@ function updateObjects() {
   const projectiles = allObj.filter(obj => obj.isProjectile);
 
   // const robotProjectiles = allObj.filter(obj => obj.robotProjectile);
-  findClosestPlayerWithinRadius(craftObjs);
-  animateRobotPlayers(craftObjs);
+  findClosestPlayerWithinRadius(robotObjs, playerObjs);
+  animateRobotPlayers(robotObjs);
   animateProjectiles(projectiles);
   updateCraftHitPoints(craftObjs, projectiles);
   removeExpiredObjects(allObj); // must be last
-
-  const res = process.hrtime(gameData.printTime)[1] / 1000000;
-  if (PRINT_STATS_TO_CONSOLE && ~~res > 900) {
-    gameData.printTime = null;
-    console.reset();
-    console.info({PORT, FPS, ROBOTS});
-    // console.info('Loop time: %dms', res);
-    console.info('Players: %d', playerObjs.length);
-    console.info('Robots: %d', robotObjs.length);
-    console.info('Projectiles: %d', projectiles.length);
-  }
 
   gameData.objectsById = {
     ...gameData.objectsById,
     ...gameData.robotProjectiles,
   };
   gameData.robotProjectiles = {};
+  return { playerObjs, robotObjs, projectiles };
 }
 
 function filterOutTooFar(player, allObs) {
@@ -299,7 +285,12 @@ function filterOutTooFar(player, allObs) {
 }
 
 function renderLoop() {
-  updateObjects();
+  const frameTime = process.hrtime();
+  if (PRINT_STATS_TO_CONSOLE && !gameData.startOfPeriod) {
+    gameData.startOfPeriod = process.hrtime();
+  }
+
+  const { playerObjs, robotObjs, projectiles } = updateObjects();
 
   if (lastMsgTime - Date.now() > 1000) {
     isIdle = true;
@@ -313,6 +304,25 @@ function renderLoop() {
         socketConnections[id].emit('message-all', res);
       }
     });
+  }
+
+  const ms = process.hrtime(frameTime)[1] / 1000000;
+  gameData.totalSm += ms;
+  if (PRINT_STATS_TO_CONSOLE) {
+    const duration = process.hrtime(gameData.startOfPeriod);
+    if (duration[0] > 0) {
+      console.reset();
+      console.info('Configuration', {PORT, FPS, ROBOTS});
+      console.info('Players: %d', playerObjs.length);
+      console.info('Robots: %d', robotObjs.length);
+      console.info('Projectiles: %d', projectiles.length);
+      console.info('Frame Avg Duration (ms)', gameData.totalSm / gameData.frames);
+      console.info('Frames/Second', gameData.frames);
+      gameData.startOfPeriod = null;
+      gameData.frames = 0;
+      gameData.totalSm = 0;
+    }
+    gameData.frames += 1;
   }
 }
 
