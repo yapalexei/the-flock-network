@@ -1,15 +1,19 @@
-FROM node:12
+FROM node:22-alpine
+
+RUN corepack enable
 
 WORKDIR /usr/src/app
 
-COPY package*.json ./
+COPY package.json pnpm-lock.yaml ./
 
-RUN npm install
+RUN pnpm install --frozen-lockfile --prod
 
-COPY . .
+COPY src ./src
 
-# ENV PORT=3001
+ENV NODE_ENV=production
+USER node
 
-EXPOSE ${PORT}
+# Railway injects PORT; 3001 is the local default.
+EXPOSE 3001
 
-CMD [ "npm", "start" ]
+CMD [ "node", "src/server/index.js" ]

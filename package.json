@@ -1,8 +1,8 @@
 {
-  "name": "socket-io-chat-app",
+  "name": "the-flock-network",
   "version": "1.0.0",
-  "description": "",
-  "main": "./src/index.js",
+  "description": "socket.io game server for the-flock",
+  "main": "./src/server/index.js",
   "scripts": {
     "docker:build": "docker-compose up --build",
     "docker": "docker-compose up",
@@ -10,9 +10,12 @@
   },
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.29.1",
   "dependencies": {
-    "express": "^4.15.2",
-    "socket.io": "^2.3.0",
-    "uuid": "^8.2.0"
+    "express": "^5.3.0",
+    "socket.io": "^4.8.4"
   }
 }

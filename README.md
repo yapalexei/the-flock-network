@@ -2,11 +2,29 @@
 A simple (socket.io) websocket server for managing [the-flock](https://github.com/yapalexei/the-flock) client connections.
 
 ## Prerequisites
-- node version: 12.12.0
-- npm version: 6.11.3
+- node >= 20
+- [pnpm](https://pnpm.io) (`corepack enable`)
 - (optional) Docker
 
 ## Setup and run steps
-- `yarn`
-- `yarn start`
-- OR (optionally) `yarn docker`
+- `pnpm install`
+- `pnpm start`
+- OR (optionally) `pnpm docker`
+
+## Configuration (env vars)
+| Var | Default | Notes |
+| --- | --- | --- |
+| `PORT` / `HOST` | `3001` / `0.0.0.0` | Railway injects `PORT`. |
+| `ALLOWED_ORIGINS` | `http://localhost:9000,http://127.0.0.1:9000` | Comma separated browser origins allowed to connect. Set to the public URL of the client when hosting. `*` allows all. |
+| `MAX_CONNECTIONS` | `100` | Extra connections are dropped. |
+| `MAX_MSGS_PER_SEC` | `120` | Per-socket message budget; excess is ignored. |
+| `ALLOW_RESET` / `RESET_COOLDOWN_MS` | `1` / `30000` | The client "g-o-d" key combo resets the world for everyone; set `ALLOW_RESET=0` on a public host. |
+| `FPS`, `ROBOTS`, `HIDE_OBJS_PAST_RADIUS`, `ROBOT_SPAWN_PLACEMENT_OFFSET`, `ENABLE_ENEMY_SHOOTING`, `PRINT_STATS_TO_CONSOLE` | see `docker-compose.yml` | Game tuning. `0` now really means off. |
+| `DROP_CHANCE` | `0.05` | Chance (0-1) that a destroyed robot drops a recharge box. Flying a player craft over it restores half its shield capacity; unclaimed boxes vanish after 60s. |
+| `PROJECTILE_MAX_RANGE_KM` | `1.5` | Shots (lasers, torpedoes, enemy fire) are expired after flying this far; the screen only shows about 1km around a player. |
+
+Torpedo, blast and craft-explosion tuning are constants at the top of `src/server/index.js` (`TORPEDO_*`, `CRAFT_EXPLOSION`); enemy flight tuning is at the top of `src/server/flight.js` and enemy-vs-enemy avoidance (`AVOID_OUTER_M`, `COLLISION_INNER_M`, collision damage) at the top of `src/server/avoidance.js`.
+
+Hit detection uses a grid over the live projectiles (`src/server/hitgrid.js`) so each craft is only tested against the shots in its own and neighbouring cells. The cell size is derived from the hit distances, so changing `PROJECTILE_HIT_DISTANCE` or `TORPEDO_FUSE_DISTANCE` needs no other change.
+
+`GET /health` returns 200 (use as the Railway healthcheck).
