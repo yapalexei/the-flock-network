@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Flock network data flow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #111111;
+      --color-ink:     #eeeeee;
+      --color-muted:   #aaaaaa;
+      --color-accent:  #4fc3f7;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Data flow · The Flock network</p>
+    <h1>How a message becomes a world update</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 56 960 424" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flock-data-flow-title flock-data-flow-desc">
+        <title id="flock-data-flow-title">The Flock network data flow</title>
+        <desc id="flock-data-flow-desc">Player messages pass the intake checks into the world store. Every frame the simulation updates the store and the encoder sends each player only what changed near them. Enemies are spawned onto a ring around the start.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#aaaaaa"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4fc3f7"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9db4d6"/></marker>
+        </defs>
+
+        <rect x="0" y="56" width="960" height="424" fill="#111111"/>
+
+        <!-- arrows -->
+        <path d="M 176,128 H 264" fill="none" stroke="#9db4d6" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <path d="M 440,128 H 552" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 808,128 H 752" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 652,160 V 280" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 716,280 V 160" fill="none" stroke="#aaaaaa" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <path d="M 588,160 V 216 Q 588,224 580,224 H 360 Q 352,224 352,232 V 280" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 264,312 H 116 Q 108,312 108,304 V 160" fill="none" stroke="#4fc3f7" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+        <!-- arrow labels -->
+        <rect x="186" y="110" width="68" height="12" rx="2" fill="#111111"/>
+        <text x="220" y="119" fill="#9db4d6" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STATE+SHOTS</text>
+        <rect x="456" y="110" width="80" height="12" rx="2" fill="#111111"/>
+        <text x="496" y="119" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CLEAN OBJECTS</text>
+        <rect x="756" y="110" width="48" height="12" rx="2" fill="#111111"/>
+        <text x="780" y="119" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ENEMIES</text>
+        <rect x="604" y="186" width="40" height="12" rx="2" fill="#111111"/>
+        <text x="624" y="195" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ACTIVE</text>
+        <rect x="724" y="186" width="48" height="12" rx="2" fill="#111111"/>
+        <text x="748" y="195" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">RESULTS</text>
+        <rect x="446" y="206" width="48" height="12" rx="2" fill="#111111"/>
+        <text x="470" y="215" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VISIBLE</text>
+        <rect x="116" y="226" width="72" height="12" rx="2" fill="#111111"/>
+        <text x="152" y="235" fill="#4fc3f7" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WORLD DELTAS</text>
+        <!-- nodes -->
+        <rect x="240" y="248" width="536" height="128" rx="8" fill="rgba(238,238,238,0.03)" stroke="rgba(238,238,238,0.10)" stroke-width="0.8"/>
+        <rect x="434" y="244" width="148" height="12" rx="2" fill="#111111"/>
+        <text x="508" y="253" fill="#8c8c8c" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">FRAME LOOP · EVERY 1/FPS S</text>
+        <rect x="40" y="96" width="136" height="64" rx="6" fill="#111111"/>
+        <rect x="40" y="96" width="136" height="64" rx="6" fill="rgba(170,170,170,0.10)" stroke="#8c8c8c" stroke-width="1"/>
+        <rect x="48" y="104" width="48" height="12" rx="2" fill="transparent" stroke="rgba(140,140,140,0.50)" stroke-width="0.8"/>
+        <text x="72" y="113" fill="#8c8c8c" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BROWSER</text>
+        <text x="108" y="136" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Players</text>
+        <text x="108" y="152" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">socket.io clients</text>
+        <rect x="264" y="96" width="176" height="64" rx="6" fill="#111111"/>
+        <rect x="264" y="96" width="176" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="272" y="104" width="44" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="294" y="113" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">INTAKE</text>
+        <text x="352" y="136" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Message intake</text>
+        <text x="352" y="152" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">rate limit · whitelist</text>
+        <rect x="552" y="96" width="200" height="64" rx="6" fill="#111111"/>
+        <rect x="552" y="96" width="200" height="64" rx="6" fill="rgba(79,195,247,0.10)" stroke="#4fc3f7" stroke-width="1"/>
+        <rect x="560" y="104" width="40" height="12" rx="2" fill="transparent" stroke="rgba(79,195,247,0.50)" stroke-width="0.8"/>
+        <text x="580" y="113" fill="#4fc3f7" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+        <text x="652" y="136" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">World store</text>
+        <text x="652" y="152" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">world.js · craft grid</text>
+        <rect x="808" y="96" width="112" height="64" rx="6" fill="#111111"/>
+        <rect x="808" y="96" width="112" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="816" y="104" width="40" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="836" y="113" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SPAWN</text>
+        <text x="864" y="136" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Enemy ring</text>
+        <text x="864" y="152" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">1.0–2.4 km</text>
+        <rect x="552" y="280" width="200" height="64" rx="6" fill="#111111"/>
+        <rect x="552" y="280" width="200" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="560" y="288" width="32" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="576" y="297" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SIM</text>
+        <text x="652" y="320" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Simulation</text>
+        <text x="652" y="336" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">robots · shots · hits</text>
+        <rect x="264" y="280" width="176" height="64" rx="6" fill="#111111"/>
+        <rect x="264" y="280" width="176" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="272" y="288" width="36" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="290" y="297" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WIRE</text>
+        <text x="352" y="320" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Update encoder</text>
+        <text x="352" y="336" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">wire.js · changes only</text>
+        <!-- legend -->
+        <line x1="40" y1="420" x2="920" y2="420" stroke="rgba(238,238,238,0.10)" stroke-width="0.8"/>
+        <text x="40" y="436" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+        <rect x="40" y="452" width="14" height="10" rx="2" fill="rgba(79,195,247,0.10)" stroke="#4fc3f7" stroke-width="1"/>
+        <text x="60" y="460" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Shared world state</text>
+        <rect x="200" y="452" width="14" height="10" rx="2" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <text x="220" y="460" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Module</text>
+        <rect x="288" y="452" width="14" height="10" rx="2" fill="rgba(170,170,170,0.10)" stroke="#8c8c8c" stroke-width="1"/>
+        <text x="308" y="460" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Browser</text>
+        <line x1="380" y1="457" x2="408" y2="457" stroke="#9db4d6" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+        <text x="416" y="460" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Client to server</text>
+        <line x1="540" y1="457" x2="568" y2="457" stroke="#4fc3f7" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+        <text x="576" y="460" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">World deltas to each player</text>
+        <line x1="740" y1="457" x2="768" y2="457" stroke="#aaaaaa" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+        <text x="776" y="460" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Results back</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

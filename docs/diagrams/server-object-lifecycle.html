@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Flock shot, drop and blast lifecycle</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #111111;
+      --color-ink:     #eeeeee;
+      --color-muted:   #aaaaaa;
+      --color-accent:  #4fc3f7;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Lifecycle · Shots, drops and blasts</p>
+    <h1>What happens to shots, drops and blasts</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 56 960 484" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flock-object-lifecycle-title flock-object-lifecycle-desc">
+        <title id="flock-object-lifecycle-title">The Flock shot, drop and blast lifecycle</title>
+        <desc id="flock-object-lifecycle-desc">A shot is created, flies, expires on a hit, at 1.5 km or after 5 seconds, and is removed 500 ms later; a torpedo hit makes a blast. Destroyed craft sometimes leave a recharge box. Everything is removed after a short life.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#aaaaaa"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4fc3f7"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9db4d6"/></marker>
+        </defs>
+
+        <rect x="0" y="56" width="960" height="484" fill="#111111"/>
+
+        <!-- arrows -->
+        <path d="M 66,120 H 120" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 260,120 H 348" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 488,120 H 576" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 716,120 H 836 Q 844,120 844,128 V 248" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 646,152 V 248" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 716,280 H 804" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 260,408 H 348" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 488,408 H 836 Q 844,408 844,400 V 312" fill="none" stroke="#aaaaaa" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <!-- arrow labels -->
+        <rect x="80" y="102" width="32" height="12" rx="2" fill="#111111"/>
+        <text x="96" y="111" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">FIRE</text>
+        <rect x="272" y="102" width="64" height="12" rx="2" fill="#111111"/>
+        <text x="304" y="111" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">NEXT FRAME</text>
+        <rect x="496" y="102" width="72" height="12" rx="2" fill="#111111"/>
+        <text x="532" y="111" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HIT OR RANGE</text>
+        <rect x="752" y="102" width="48" height="12" rx="2" fill="#111111"/>
+        <text x="776" y="111" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">+500 MS</text>
+        <rect x="654" y="194" width="68" height="12" rx="2" fill="#111111"/>
+        <text x="688" y="203" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">TORPEDO HIT</text>
+        <rect x="736" y="262" width="48" height="12" rx="2" fill="#111111"/>
+        <text x="760" y="271" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">+600 MS</text>
+        <rect x="278" y="390" width="52" height="12" rx="2" fill="#111111"/>
+        <text x="304" y="399" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">15% DROP</text>
+        <rect x="618" y="390" width="84" height="12" rx="2" fill="#111111"/>
+        <text x="660" y="399" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PICKUP OR 60 S</text>
+        <!-- states -->
+        <circle cx="60" cy="120" r="6" fill="#eeeeee"/>
+        <rect x="120" y="88" width="140" height="64" rx="6" fill="#111111"/>
+        <rect x="120" y="88" width="140" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="128" y="96" width="36" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="146" y="105" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SHOT</text>
+        <text x="190" y="128" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Created</text>
+        <text x="190" y="144" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">player or enemy fire</text>
+        <rect x="348" y="88" width="140" height="64" rx="6" fill="#111111"/>
+        <rect x="348" y="88" width="140" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="356" y="96" width="36" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="374" y="105" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SHOT</text>
+        <text x="418" y="128" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Flying</text>
+        <text x="418" y="144" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">base + ship speed</text>
+        <rect x="576" y="88" width="140" height="64" rx="6" fill="#111111"/>
+        <rect x="576" y="88" width="140" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="584" y="96" width="36" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="602" y="105" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SHOT</text>
+        <text x="646" y="128" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Expired</text>
+        <text x="646" y="144" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">hit · 1.5 km · 5 s</text>
+        <rect x="576" y="248" width="140" height="64" rx="6" fill="#111111"/>
+        <rect x="576" y="248" width="140" height="64" rx="6" fill="rgba(79,195,247,0.10)" stroke="#4fc3f7" stroke-width="1"/>
+        <rect x="584" y="256" width="40" height="12" rx="2" fill="transparent" stroke="rgba(79,195,247,0.50)" stroke-width="0.8"/>
+        <text x="604" y="265" fill="#4fc3f7" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BLAST</text>
+        <text x="646" y="288" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Blast</text>
+        <text x="646" y="304" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">torpedo · 100 m</text>
+        <rect x="804" y="248" width="80" height="64" rx="6" fill="#111111"/>
+        <rect x="804" y="248" width="80" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="812" y="256" width="32" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="828" y="265" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ALL</text>
+        <text x="844" y="292" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Removed</text>
+        <rect x="120" y="376" width="140" height="64" rx="6" fill="#111111"/>
+        <rect x="120" y="376" width="140" height="64" rx="6" fill="rgba(238,238,238,0.03)" stroke="rgba(238,238,238,0.30)" stroke-width="1"/>
+        <rect x="128" y="384" width="40" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.22)" stroke-width="0.8"/>
+        <text x="148" y="393" fill="#8c8c8c" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CRAFT</text>
+        <text x="190" y="416" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Craft destroyed</text>
+        <text x="190" y="432" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">see craft lifecycle</text>
+        <rect x="348" y="376" width="140" height="64" rx="6" fill="#111111"/>
+        <rect x="348" y="376" width="140" height="64" rx="6" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <rect x="356" y="384" width="36" height="12" rx="2" fill="transparent" stroke="rgba(238,238,238,0.40)" stroke-width="0.8"/>
+        <text x="374" y="393" fill="#eeeeee" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DROP</text>
+        <text x="418" y="416" fill="#eeeeee" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Waiting</text>
+        <text x="418" y="432" fill="#aaaaaa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">recharge box · 60 s</text>
+        <!-- legend -->
+        <line x1="40" y1="480" x2="920" y2="480" stroke="rgba(238,238,238,0.10)" stroke-width="0.8"/>
+        <text x="40" y="496" fill="#aaaaaa" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+        <circle cx="45" cy="517" r="4" fill="#eeeeee"/>
+        <text x="60" y="520" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Start</text>
+        <rect x="120" y="512" width="14" height="10" rx="2" fill="#1b1b1b" stroke="#eeeeee" stroke-width="1"/>
+        <text x="140" y="520" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">State</text>
+        <rect x="208" y="512" width="14" height="10" rx="2" fill="rgba(79,195,247,0.10)" stroke="#4fc3f7" stroke-width="1"/>
+        <text x="228" y="520" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Explosion that hurts craft</text>
+        <rect x="400" y="512" width="14" height="10" rx="2" fill="rgba(238,238,238,0.03)" stroke="rgba(238,238,238,0.30)" stroke-width="1"/>
+        <text x="420" y="520" fill="#aaaaaa" font-size="8.5" font-family="'Geist', sans-serif">Comes from the craft lifecycle</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

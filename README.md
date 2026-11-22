@@ -34,3 +34,19 @@ Shots fired by players fly at the base speed (`PROJECTILE_DISTANCE_TRAVELLED_PER
 What players receive (`src/server/wire.js`): a `world` event per player with only what changed since the last one (`u` new/changed objects, `d` ids that left their view, `s` = full snapshot after connecting or a client `resync`). Objects are trimmed to the fields the client draws, with short keys and small integer ids, and each is compared and JSON-encoded at most once per frame however many players see it. The packet is handed straight to the engine (`socket.conn.send` of a ready-made socket.io event), so the format is described at the top of `wire.js` and decoded by `world-wire.js` in the client; change both together. Visibility is a grid lookup with the same rule as before (`HIDE_OBJS_PAST_RADIUS`).
 
 `GET /health` returns 200 (use as the Railway healthcheck).
+
+## How it works
+
+Data flow: a player message is checked at the intake and stored; every frame the simulation updates the store and the encoder sends each player what changed near them.
+
+![Data flow: players send state and shots to the message intake, which writes clean objects into the world store; enemies are spawned onto a ring; each frame the simulation reads and updates the store and the update encoder sends world deltas back to players](docs/images/server-data-flow.png)
+
+Players and enemies: enemies sleep until a player is near; both end as Destroyed, are removed 500 ms later, and a player then gets a new craft.
+
+![Craft lifecycle: enemies go between Idle and Active; players go from Connected to Flying; both end Destroyed then Removed after 500 ms, after which the player is Connected again](docs/images/server-craft-lifecycle.png)
+
+Shots, drops and blasts: all of them are short-lived and swept out of the store after a short time.
+
+![Object lifecycle: a shot is Created, Flying and Expired, then Removed 500 ms later, and a torpedo hit makes a Blast; a destroyed craft may leave a Waiting recharge box](docs/images/server-object-lifecycle.png)
+
+The diagrams are HTML with inline SVG in `docs/diagrams/`; the PNGs above are exports of them.
