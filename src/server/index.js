@@ -25,7 +25,11 @@ const ROBOTS = envNumber('ROBOTS', 1000);
 const HIDE_OBJS_PAST_RADIUS = envNumber('HIDE_OBJS_PAST_RADIUS', 0.0001); // need to figure out what this value represents in the game world.
 // Visibility grid cell: at least sqrt(HIDE_OBJS_PAST_RADIUS), since calcDistance is hypot(dx*dx, dy*dy).
 const HIDE_CELL_DEG = Math.max(Math.sqrt(HIDE_OBJS_PAST_RADIUS), 0.0001);
-const ROBOT_SPAWN_PLACEMENT_OFFSET = envNumber('ROBOT_SPAWN_PLACEMENT_OFFSET', 0.06);
+// Where players start (the client centres the map here) and the ring the enemies are spread over around
+// it, in metres from the centre: nearest and farthest an enemy can spawn.
+const GAME_CENTER = [envNumber('GAME_CENTER_LNG', -122.67118367793355), envNumber('GAME_CENTER_LAT', 45.520579458294915)];
+const ENEMY_RING_INNER_M = Math.max(0, envNumber('ENEMY_RING_INNER_M', 1000));
+const ENEMY_RING_OUTER_M = Math.max(ENEMY_RING_INNER_M + 1, envNumber('ENEMY_RING_OUTER_M', 2400));
 const ENABLE_ENEMY_SHOOTING = envNumber('ENABLE_ENEMY_SHOOTING', 0);
 
 // Hosting / abuse limits
@@ -43,6 +47,9 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:9000,h
 
 const PROJECTILE_LIFETIME = 5000;
 const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.03;
+// A shot flies at the base speed above PLUS the speed its shooter had when firing, so it is never slower than
+// the craft (turbo included). The client reports that speed in m/s; this caps what it can claim.
+const MAX_SHIP_SPEED_MPS = 4000;
 const PROJECTILE_HIT_DISTANCE = envNumber('PROJECTILE_HIT_DISTANCE', 5e-8);
 // Projectiles are expired once they have flown this far (km). Nothing that far from the shooter is
 // visible to it, and they would otherwise keep being simulated and tested for the whole lifetime above.
@@ -168,6 +175,7 @@ function sanitizeClientObject(socketId, key, raw, existing, now) {
     if (existing || raw.ownerId !== socketId || !key.startsWith(socketId)) return null;
     // Clients only choose the type of shot; the damage is the server's call.
     const isTorpedo = raw.isTorpedo === true;
+    const shipSpeed = clamp(raw.shipSpeed, 0, MAX_SHIP_SPEED_MPS, 0);
     const projectile = {
       id: key,
       pos,
@@ -176,6 +184,8 @@ function sanitizeClientObject(socketId, key, raw, existing, now) {
       isProjectile: 'true',
       bearing,
       hitValue: isTorpedo ? TORPEDO_HIT_VALUE : 1,
+      // Distance flown per server frame, in km.
+      stepKm: PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME + shipSpeed / 1000 / FPS,
       ownerId: socketId,
       time: now,
     };
@@ -224,7 +234,7 @@ io.on('connection', function(socket) {
   socket.data.known = new Map();
   socket.data.fresh = true;
   console.log('New Player ID:', socket.id);
-  socket.emit('connected', { id: socket.id, fps: FPS });
+  socket.emit('connected', { id: socket.id, fps: FPS, gameCenter: GAME_CENTER });
 
   let windowStart = Date.now();
   let windowCount = 0;
@@ -298,7 +308,7 @@ io.on('connection', function(socket) {
 
 function generateAIPlayers(robots = ROBOTS) {
   let count = robots;
-  const offset = ROBOT_SPAWN_PLACEMENT_OFFSET;
+  const metersPerDegreeLng = 111195 * Math.cos(GAME_CENTER[1] * Math.PI / 180);
   const fighters = [
     'tieFighter', 'tie1', 'tie2', 'tie3', 'tie4',
   ];
@@ -307,15 +317,16 @@ function generateAIPlayers(robots = ROBOTS) {
     const random = Math.random();
     const fighterIndex = random * fighters.length === fighters.length ? 0 : ~~(random * fighters.length);
     const newPlayerUuid = uuid();
-    const xOffset = offset * (Math.random() - 0.5);
-    const yOffset = offset * (Math.random() - 0.5);
+    // Uniform over the ring's area (not its radius, which would bunch enemies near the inner edge).
+    const angle = Math.random() * 2 * Math.PI;
+    const radius = Math.sqrt(ENEMY_RING_INNER_M ** 2 + Math.random() * (ENEMY_RING_OUTER_M ** 2 - ENEMY_RING_INNER_M ** 2));
     world.add({
       id: newPlayerUuid,
       isIdle: true,
       isRobot: true,
       pos: {
-        x: -122.67399123828811 + xOffset,
-        y: 45.53044800949424 + yOffset
+        x: GAME_CENTER[0] + radius * Math.cos(angle) / metersPerDegreeLng,
+        y: GAME_CENTER[1] + radius * Math.sin(angle) / 111195,
       },
       speed: 0.002 + ((Math.random() - 0.5) * 0.002),
       velocity: {
@@ -474,11 +485,12 @@ function animateProjectiles(projectiles) {
     obj.prevPos.x = obj.prevPos.x != obj.pos.x ? obj.pos.x : obj.prevPos.x;
     obj.prevPos.y = obj.prevPos.y != obj.pos.y ? obj.pos.y : obj.prevPos.y;
 
-    const newPos = calcDestination(obj.pos, PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME, obj.bearing);
+    const step = obj.stepKm || PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME;
+    const newPos = calcDestination(obj.pos, step, obj.bearing);
     obj.pos.x = newPos[0];
     obj.pos.y = newPos[1];
 
-    const travelled = (projectileTravel.get(obj) || 0) + PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME;
+    const travelled = (projectileTravel.get(obj) || 0) + step;
     if (travelled > PROJECTILE_MAX_RANGE_KM) obj.expired = now;
     else projectileTravel.set(obj, travelled);
   });
@@ -515,7 +527,10 @@ function applyBlast(center, { radius, core, damage, killer, skipId }, now, explo
   });
 }
 
-/** Each live shot hits the nearest craft within its reach (never its owner). */
+/**
+ * Each live shot hits the first craft its path crosses within reach (never its owner). The path is the
+ * segment it flew this frame, not just where it ended up, so a fast shot cannot jump over a craft.
+ */
 function updateCraftHitPoints(projectiles, explosions) {
   const now = Date.now();
   projectiles.forEach((projectile) => {
@@ -523,14 +538,35 @@ function updateCraftHitPoints(projectiles, explosions) {
     const owner = world.get(projectile.ownerId);
     if (!owner) return;
     const reach = projectile.isTorpedo ? TORPEDO_FUSE_DISTANCE : PROJECTILE_HIT_DISTANCE;
+    const from = projectile.prevPos;
+    const to = projectile.pos;
+    const segX = to.x - from.x;
+    const segY = to.y - from.y;
+    // Work in a frame where a degree of longitude is as long as a degree of latitude, so "closest point" is geometric.
+    const lngScale = Math.cos(to.y * Math.PI / 180);
+    const segLength2 = segX * segX * lngScale * lngScale + segY * segY;
+    const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+    const box = Math.max(Math.abs(segX), Math.abs(segY)) / 2 + HIT_REACH_DEG;
+
     let target = null;
-    let nearest = reach;
-    world.forEachCraftNear(projectile.pos, HIT_REACH_DEG, (craft) => {
+    let targetAlong = Infinity;
+    let targetDistance = reach;
+    world.forEachCraftNear(mid, box, (craft) => {
       if (craft.expired || craft.id === projectile.ownerId) return;
-      const distance = calcDistance(craft.pos, projectile.pos);
-      if (distance < nearest) {
-        nearest = distance;
+      // How far along the path (0 = start, 1 = end) the point nearest this craft is.
+      let along = 0;
+      if (segLength2 > 0) {
+        along = ((craft.pos.x - from.x) * segX * lngScale * lngScale + (craft.pos.y - from.y) * segY) / segLength2;
+        along = Math.max(0, Math.min(1, along));
+      }
+      const nearX = from.x + segX * along;
+      const nearY = from.y + segY * along;
+      const distance = Math.hypot((craft.pos.x - nearX) ** 2, (craft.pos.y - nearY) ** 2);
+      if (distance >= reach) return;
+      if (along < targetAlong - 1e-9 || (Math.abs(along - targetAlong) <= 1e-9 && distance < targetDistance)) {
         target = craft;
+        targetAlong = along;
+        targetDistance = distance;
       }
     });
     if (!target) return;
@@ -676,7 +712,7 @@ function initTimer() {
   console.log('FPS', FPS);
   console.log('ROBOTS', ROBOTS);
   console.log('HIDE_OBJS_PAST_RADIUS', HIDE_OBJS_PAST_RADIUS);
-  console.log('ROBOT_SPAWN_PLACEMENT_OFFSET', ROBOT_SPAWN_PLACEMENT_OFFSET);
+  console.log('ENEMY_RING_M', ENEMY_RING_INNER_M, ENEMY_RING_OUTER_M);
   console.log('ENABLE_ENEMY_SHOOTING', ENABLE_ENEMY_SHOOTING);
   console.log('PROJECTILE_LIFETIME', PROJECTILE_LIFETIME);
   console.log('PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME', PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME);
