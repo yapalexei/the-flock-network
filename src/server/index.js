@@ -1,7 +1,8 @@
 const { randomUUID: uuid } = require('crypto');
 const { planFlight, applyFlight, resetFlight, groundDistanceM } = require('./flight');
 const { findNeighbors, adjustPlan, robotsToDamage, applyShove } = require('./avoidance');
-const { buildProjectileGrid, nearbyProjectileIndexes } = require('./hitgrid');
+const { World } = require('./world');
+const { beginFrame, endFrame, visibleEntries, buildPacket } = require('./wire');
 const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
@@ -22,6 +23,8 @@ const PORT = envNumber('PORT', 3001);
 const FPS = envNumber('FPS', 40);
 const ROBOTS = envNumber('ROBOTS', 1000);
 const HIDE_OBJS_PAST_RADIUS = envNumber('HIDE_OBJS_PAST_RADIUS', 0.0001); // need to figure out what this value represents in the game world.
+// Visibility grid cell: at least sqrt(HIDE_OBJS_PAST_RADIUS), since calcDistance is hypot(dx*dx, dy*dy).
+const HIDE_CELL_DEG = Math.max(Math.sqrt(HIDE_OBJS_PAST_RADIUS), 0.0001);
 const ROBOT_SPAWN_PLACEMENT_OFFSET = envNumber('ROBOT_SPAWN_PLACEMENT_OFFSET', 0.06);
 const ENABLE_ENEMY_SHOOTING = envNumber('ENABLE_ENEMY_SHOOTING', 0);
 
@@ -40,18 +43,18 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:9000,h
 
 const PROJECTILE_LIFETIME = 5000;
 const PROJECTILE_DISTANCE_TRAVELLED_PER_FRAME = 0.03;
-const PROJECTILE_HIT_DISTANCE = 0.00000002;
+const PROJECTILE_HIT_DISTANCE = envNumber('PROJECTILE_HIT_DISTANCE', 5e-8);
 // Projectiles are expired once they have flown this far (km). Nothing that far from the shooter is
 // visible to it, and they would otherwise keep being simulated and tested for the whole lifetime above.
 const PROJECTILE_MAX_RANGE_KM = envNumber('PROJECTILE_MAX_RANGE_KM', 1.5);
-const TIME_BETWEEN_FIRE = 700;
+const ENEMY_TIME_BETWEEN_FIRE = 700;
 // Recharge boxes: dropped by destroyed robots, collected by flying a player craft over them.
 const DROP_CHANCE = envNumber('DROP_CHANCE', 0.05);
 const DROP_LIFETIME = 60000;
 // Same units as PROJECTILE_HIT_DISTANCE (see calcDistance); roughly 40px at zoom 16.
 const DROP_PICKUP_DISTANCE = 0.0000002;
 // Fraction of the craft's shield capacity restored per box.
-const DROP_RECHARGE_FRACTION = 0.5;
+const DROP_RECHARGE_FRACTION = 0.25;
 // Torpedoes (client arms them with "s"): slower to fire, 10x the damage, and they explode.
 // The fuse is wider than a laser's hit distance so a torpedo flying past a craft still detonates.
 const MIN_MS_BETWEEN_TORPEDOES = 160;
@@ -63,9 +66,16 @@ const TORPEDO_BLAST = { radius: 100, core: 40 };
 const CRAFT_EXPLOSION = { radius: 50, core: 20, damage: 5 };
 // How long a torpedo explosion stays visible to clients.
 const BLAST_DISPLAY_MS = 600;
-// Hit detection grid cell (degrees): must cover the widest hit reach along one axis. calcDistance is
-// hypot(dx*dx, dy*dy), so a reach R allows at most |dx| < sqrt(R).
-const HIT_CELL_DEG = Math.sqrt(Math.max(PROJECTILE_HIT_DISTANCE, TORPEDO_FUSE_DISTANCE));
+// Hit reach along one axis (degrees): calcDistance is hypot(dx*dx, dy*dy), so a reach R allows at most |dx| < sqrt(R).
+const HIT_REACH_DEG = Math.sqrt(Math.max(PROJECTILE_HIT_DISTANCE, TORPEDO_FUSE_DISTANCE));
+// World grid cell (degrees, roughly 560m). Craft are looked up by cell: hits, blasts, who is near a player.
+const WORLD_CELL_DEG = 0.005;
+// A robot chases a player closer than CHASE_RADIUS (calcDistance units). Only robots within ACTIVE_BOX_DEG of a
+// player (the chase range plus a margin, so the robots that matter next are already simulated) are simulated.
+const CHASE_RADIUS = 0.00005;
+const ACTIVE_BOX_DEG = Math.sqrt(CHASE_RADIUS) + 0.001;
+// How long destroyed craft and expired shots linger (to show the explosion) before being removed.
+const WRECK_MS = 500;
 // Robot cannon positions in source-image pixels from the image centre (x: right, y: toward the nose),
 // scaled by the robot icon-size. Shots alternate through the list. Sizes: assets in the-flock.
 const ROBOT_ICON_SIZE = 0.4;
@@ -116,13 +126,11 @@ let batchTimer = null;
 let resetTimeout = null;
 let lastResetAt = 0;
 const gameData = {
-  objectsById: {},
-  robotProjectiles: {},
-  newObjects: {},
   frames: 0,
   startOfPeriod: null,
   totalSm: 0,
 };
+const world = new World(WORLD_CELL_DEG);
 const socketConnections = {};
 
 let lastMsgTime = 0;
@@ -202,9 +210,7 @@ function stopGame() {
   batchTimer = null;
   clearTimeout(resetTimeout);
   resetTimeout = null;
-  gameData.objectsById = {};
-  gameData.robotProjectiles = {};
-  gameData.newObjects = {};
+  world.clear();
   console.log('no players connected, game paused');
 }
 
@@ -214,6 +220,9 @@ io.on('connection', function(socket) {
     return;
   }
   socketConnections[socket.id] = socket;
+  // What this player's client has been told about: wire id -> version. See wire.js.
+  socket.data.known = new Map();
+  socket.data.fresh = true;
   console.log('New Player ID:', socket.id);
   socket.emit('connected', { id: socket.id, fps: FPS });
 
@@ -223,10 +232,15 @@ io.on('connection', function(socket) {
   let lastTorpedoAt = 0;
 
   socket.on('disconnect', function () {
-    io.emit('object removed', socket.id);
-    delete gameData.objectsById[socket.id];
+    world.removeById(socket.id);
     delete socketConnections[socket.id];
     if (!Object.keys(socketConnections).length) stopGame();
+  });
+
+  // The client starts a round with an empty world: send everything again.
+  socket.on('resync', () => {
+    socket.data.known.clear();
+    socket.data.fresh = true;
   });
 
   socket.on('reset game', (msg) => {
@@ -234,7 +248,7 @@ io.on('connection', function(socket) {
     if (!ALLOW_RESET || resetTimeout || now - lastResetAt < RESET_COOLDOWN_MS) return;
     lastResetAt = now;
     console.log('game reset triggered by:', socket.id);
-    gameData.objectsById = {};
+    world.clear();
     const robots = msg && Number.isInteger(msg.robots) && msg.robots >= 0 && msg.robots < MAX_ROBOTS
       ? msg.robots
       : ROBOTS;
@@ -259,14 +273,12 @@ io.on('connection', function(socket) {
     if (keys.length > MAX_KEYS_PER_MSG) return;
 
     // A destroyed craft is frozen until the server removes it; late updates must not resurrect it.
-    const ownCraft = gameData.objectsById[socket.id];
+    const ownCraft = world.get(socket.id);
     if (ownCraft && ownCraft.expired) return;
 
     keys.forEach((key) => {
       if (key.length > MAX_ID_LENGTH) return;
-      const existing = Object.prototype.hasOwnProperty.call(gameData.objectsById, key)
-        ? gameData.objectsById[key]
-        : null;
+      const existing = world.get(key) || null;
       const clean = sanitizeClientObject(socket.id, key, msg[key], existing, now);
       if (!clean) return;
       if (clean.isProjectile) {
@@ -277,7 +289,7 @@ io.on('connection', function(socket) {
       }
       lastMsgTime = now;
       isIdle = false;
-      gameData.objectsById[key] = clean;
+      world.add(clean);
     });
   });
 
@@ -297,7 +309,7 @@ function generateAIPlayers(robots = ROBOTS) {
     const newPlayerUuid = uuid();
     const xOffset = offset * (Math.random() - 0.5);
     const yOffset = offset * (Math.random() - 0.5);
-    gameData.objectsById[newPlayerUuid] = {
+    world.add({
       id: newPlayerUuid,
       isIdle: true,
       isRobot: true,
@@ -319,23 +331,50 @@ function generateAIPlayers(robots = ROBOTS) {
         kills: 0,
         fireCount: 0,
       }
-    }
+    });
     count -= 1;
   } while (count > 0)
 }
 
-function findClosestPlayerWithinRadius(robots, players, radius = 0.00005) {
-  robots.forEach((craft) => {
-    craft.closestPlayer = null;
-    players.forEach((player) => {
-      if (player && craft && !player.expired && player.id !== craft.id && player.pos) {
-        const distance = calcDistance(player.pos, craft.pos);
-        if (distance < radius) {
-          craft.closestPlayer = player.id;
-        }
+// Robots simulated last frame, so the ones that fell out of range can be stopped.
+let activeRobots = [];
+let activationStamp = 0;
+
+/**
+ * The robots worth simulating this frame: those within ACTIVE_BOX_DEG of a living player. Each gets
+ * its target, the nearest player within CHASE_RADIUS, if any. Every other robot sits where it is
+ * and costs nothing; hits, blasts and the broadcast still find it through the world grid.
+ */
+function findActiveRobots() {
+  const stamp = ++activationStamp;
+  const active = [];
+  world.players.forEach((player) => {
+    if (player.expired) return;
+    world.forEachCraftNear(player.pos, ACTIVE_BOX_DEG, (craft) => {
+      if (!craft.isRobot || craft.expired) return;
+      // The grid hands back whole cells; only robots inside the box count.
+      if (Math.abs(craft.pos.x - player.pos.x) >= ACTIVE_BOX_DEG || Math.abs(craft.pos.y - player.pos.y) >= ACTIVE_BOX_DEG) return;
+      if (craft.activeStamp !== stamp) {
+        craft.activeStamp = stamp;
+        craft.closestPlayer = null;
+        craft.closestDistance = CHASE_RADIUS;
+        active.push(craft);
+      }
+      const distance = calcDistance(player.pos, craft.pos);
+      if (distance < craft.closestDistance) {
+        craft.closestDistance = distance;
+        craft.closestPlayer = player.id;
       }
     });
   });
+  activeRobots.forEach((robot) => {
+    if (robot.activeStamp !== stamp) {
+      robot.closestPlayer = null;
+      resetFlight(robot);
+    }
+  });
+  activeRobots = active;
+  return active;
 }
 
 /**
@@ -359,59 +398,65 @@ function robotMuzzle(robot, shotIndex) {
   };
 }
 
-function animateRobotPlayers(allObj, neighbors) {
+function stepRobot(robot, neighbors, now) {
+  if (robot.expired) return;
+  if (!robot.prevPos) robot.prevPos = {};
+  robot.prevPos.x = robot.pos.x;
+  robot.prevPos.y = robot.pos.y;
+  // In a collision with another fighter: pushed apart, whatever else the robot is doing.
+  applyShove(robot, neighbors.get(robot));
+
+  const target = robot.closestPlayer && world.get(robot.closestPlayer);
+  if (!target || target.expired) {
+    // Nobody to chase: hold position and heading, and start the next chase fresh.
+    resetFlight(robot);
+    return;
+  }
+
+  // Steer away from, and slow for, nearby fighters so they don't fly through each other.
+  const plan = adjustPlan(planFlight(robot, target, now), neighbors.get(robot));
+  const distanceKm = applyFlight(robot, plan, FPS);
+  if (distanceKm > 0) {
+    const newPos = calcDestination(robot.pos, distanceKm, robot.bearing);
+    robot.pos.x = newPos[0];
+    robot.pos.y = newPos[1];
+  }
+
+  // Only shoot while flying at the player, not while turning away or retreating.
+  if (ENABLE_ENEMY_SHOOTING && plan.canFire) {
+    const ran = Math.random();
+    if (
+      (!robot.statistics.roundShotAt ||
+      robot.statistics.roundShotAt &&
+      (now - robot.statistics.roundShotAt) > (ENEMY_TIME_BETWEEN_FIRE + ((ran - 0.5) * 1000)))
+    ) {
+      robot.statistics.fireCount += 1;
+      robot.statistics.roundShotAt = now;
+
+      const muzzle = robotMuzzle(robot, robot.statistics.fireCount);
+      const projectile = {
+        id: robot.id + robot.statistics.roundShotAt,
+        pos: { x: muzzle.x, y: muzzle.y },
+        prevPos: { x: muzzle.x, y: muzzle.y },
+        icon: 'dot-11',
+        isProjectile: 'true',
+        bearing: muzzle.bearing + ((Math.random() - 0.5) * 0.01) || 0,
+        hitValue: 1,
+        robotProjectile: 'true',
+        ownerId: robot.id,
+        time: now,
+      };
+      world.stage(projectile);
+    }
+  }
+}
+
+/** Moves and shoots the robots near players (see findActiveRobots). */
+function animateRobotPlayers(robots, neighbors) {
   const now = Date.now();
-  allObj.forEach((robot) => {
-    if (robot.expired) return;
-    if (!robot.prevPos) robot.prevPos = {};
-    robot.prevPos.x = robot.pos.x;
-    robot.prevPos.y = robot.pos.y;
-    // In a collision with another fighter: pushed apart, whatever else the robot is doing.
-    applyShove(robot, neighbors.get(robot));
-
-    const target = robot.closestPlayer && gameData.objectsById[robot.closestPlayer];
-    if (!target || target.expired) {
-      // Nobody to chase: hold position and heading, and start the next chase fresh.
-      resetFlight(robot);
-      return;
-    }
-
-    // Steer away from, and slow for, nearby fighters so they don't fly through each other.
-    const plan = adjustPlan(planFlight(robot, target, now), neighbors.get(robot));
-    const distanceKm = applyFlight(robot, plan, FPS);
-    if (distanceKm > 0) {
-      const newPos = calcDestination(robot.pos, distanceKm, robot.bearing);
-      robot.pos.x = newPos[0];
-      robot.pos.y = newPos[1];
-    }
-
-    // Only shoot while flying at the player, not while turning away or retreating.
-    if (ENABLE_ENEMY_SHOOTING && plan.canFire) {
-      const ran = Math.random();
-      if (
-        (!robot.statistics.roundShotAt ||
-        robot.statistics.roundShotAt &&
-        (now - robot.statistics.roundShotAt) > (TIME_BETWEEN_FIRE + ((ran) * 1000)))
-      ) {
-        robot.statistics.fireCount += 1;
-        robot.statistics.roundShotAt = now;
-
-        const muzzle = robotMuzzle(robot, robot.statistics.fireCount);
-        const projectile = {
-          id: robot.id + robot.statistics.roundShotAt,
-          pos: { x: muzzle.x, y: muzzle.y },
-          prevPos: { x: muzzle.x, y: muzzle.y },
-          icon: 'dot-11',
-          isProjectile: 'true',
-          bearing: muzzle.bearing + ((Math.random() - 0.5) * 0.01) || 0,
-          hitValue: 1,
-          robotProjectile: 'true',
-          ownerId: robot.id,
-          time: now,
-        };
-        gameData.robotProjectiles[projectile.id] = projectile;
-      }
-    }
+  robots.forEach((robot) => {
+    stepRobot(robot, neighbors, now);
+    world.moved(robot);
   });
 }
 
@@ -439,27 +484,6 @@ function animateProjectiles(projectiles) {
   });
 }
 
-function removeExpiredObjects(allObj) {
-  const now = Date.now();
-  gameData.objectsById = allObj.reduce((sum, item) => {
-    if (item.isDrop && (item.collected || now - item.time > DROP_LIFETIME)) return sum;
-    if (item.isBlast && now - item.time > BLAST_DISPLAY_MS) return sum;
-
-    if (item.isProjectile && !item.expired && now - item.time > PROJECTILE_LIFETIME) {
-      item.expired = now;
-      sum[item.id] = item;
-      return sum;
-    };
-
-    if (item.expired && (now - item.expired) > 500) {
-      return sum;
-    } else {
-      sum[item.id] = item;
-    }
-
-    return sum;
-  }, {});
-}
 
 /**
  * Adds damage to a craft and destroys it when its shield is gone: credits the kill,
@@ -469,6 +493,7 @@ function damageCraft(craft, amount, killer, now, explosions) {
   craft.statistics.hitCount += amount;
   if (craft.statistics.hitCount < craft.hitCapacity) return;
   craft.expired = now;
+  world.markExpired(craft);
   if (killer.id !== craft.id) {
     if (!killer.statistics) killer.statistics = {};
     killer.statistics.kills = (killer.statistics.kills || 0) + 1;
@@ -478,8 +503,10 @@ function damageCraft(craft, amount, killer, now, explosions) {
 }
 
 /** Hurts every live craft within `radius` metres of `center`; `skipId` is never affected. */
-function applyBlast(craftObjs, center, { radius, core, damage, killer, skipId }, now, explosions) {
-  craftObjs.forEach((craft) => {
+function applyBlast(center, { radius, core, damage, killer, skipId }, now, explosions) {
+  // A degree of longitude is the shorter one here, so its box covers the radius in both directions.
+  const boxDeg = radius / (111195 * Math.cos(center.y * Math.PI / 180)) * 1.1;
+  world.forEachCraftNear(center, boxDeg, (craft) => {
     if (craft.expired || craft.id === skipId) return;
     const distance = groundDistanceM(center, craft.pos);
     if (distance >= radius) return;
@@ -488,47 +515,49 @@ function applyBlast(craftObjs, center, { radius, core, damage, killer, skipId },
   });
 }
 
-function updateCraftHitPoints(craftObjs, projectiles, explosions) {
+/** Each live shot hits the nearest craft within its reach (never its owner). */
+function updateCraftHitPoints(projectiles, explosions) {
   const now = Date.now();
-  const grid = buildProjectileGrid(projectiles, HIT_CELL_DEG);
-
-  craftObjs.forEach((craft) => {
-    if (craft.expired) return;
-    // Only the projectiles near this craft can hit it; they come back in the same order as `projectiles`.
-    const nearby = nearbyProjectileIndexes(grid, craft.pos);
-    for (let n = 0; n < nearby.length; n++) {
-      const projectile = projectiles[nearby[n]];
-      if (projectile.expired || craft.expired) continue;
-      const owner = gameData.objectsById[projectile.ownerId];
-      if (!owner) continue;
-      if (projectile.ownerId === craft.id) continue;
-      const reach = projectile.isTorpedo ? TORPEDO_FUSE_DISTANCE : PROJECTILE_HIT_DISTANCE;
-      if (calcDistance(craft.pos, projectile.pos) >= reach) continue;
-
-      projectile.expired = now;
-      if (projectile.isTorpedo) {
-        spawnBlast(projectile.pos, now);
-        // The shooter is safe from its own torpedo, like it is from its lasers.
-        applyBlast(craftObjs, projectile.pos, { ...TORPEDO_BLAST, damage: projectile.hitValue, killer: owner, skipId: owner.id }, now, explosions);
-      } else {
-        damageCraft(craft, projectile.hitValue || 1, owner, now, explosions);
+  projectiles.forEach((projectile) => {
+    if (projectile.expired) return;
+    const owner = world.get(projectile.ownerId);
+    if (!owner) return;
+    const reach = projectile.isTorpedo ? TORPEDO_FUSE_DISTANCE : PROJECTILE_HIT_DISTANCE;
+    let target = null;
+    let nearest = reach;
+    world.forEachCraftNear(projectile.pos, HIT_REACH_DEG, (craft) => {
+      if (craft.expired || craft.id === projectile.ownerId) return;
+      const distance = calcDistance(craft.pos, projectile.pos);
+      if (distance < nearest) {
+        nearest = distance;
+        target = craft;
       }
+    });
+    if (!target) return;
+
+    projectile.expired = now;
+    if (projectile.isTorpedo) {
+      spawnBlast(projectile.pos, now);
+      // The shooter is safe from its own torpedo, like it is from its lasers.
+      applyBlast(projectile.pos, { ...TORPEDO_BLAST, damage: projectile.hitValue, killer: owner, skipId: owner.id }, now, explosions);
+    } else {
+      damageCraft(target, projectile.hitValue || 1, owner, now, explosions);
     }
   });
 }
 
 /** Wrecks explode and hurt what is near them. That can destroy more craft, so work through a queue. */
-function detonateWrecks(craftObjs, explosions) {
+function detonateWrecks(explosions) {
   const now = Date.now();
   while (explosions.length) {
     const { pos, killer } = explosions.pop();
-    applyBlast(craftObjs, pos, { ...CRAFT_EXPLOSION, killer }, now, explosions);
+    applyBlast(pos, { ...CRAFT_EXPLOSION, killer }, now, explosions);
   }
 }
 
 function spawnBlast(pos, now) {
   const id = uuid();
-  gameData.newObjects[id] = {
+  world.stage({
     id,
     isBlast: true,
     pos: { ...pos },
@@ -537,14 +566,13 @@ function spawnBlast(pos, now) {
     // Roughly the blast radius at zoom 16.
     'icon-size': 0.6,
     time: now,
-  };
+  });
 }
 
 function spawnDrop(craft, now) {
   if (Math.random() >= DROP_CHANCE) return;
   const id = uuid();
-  // Not added to objectsById directly: removeExpiredObjects rebuilds it from a snapshot.
-  gameData.newObjects[id] = {
+  world.stage({
     id,
     isDrop: true,
     dropType: 'recharge',
@@ -553,61 +581,45 @@ function spawnDrop(craft, now) {
     icon: 'rechargeBox',
     'icon-size': 0.5,
     time: now,
-  };
-}
-
-function collectDrops(playerObjs, drops) {
-  drops.forEach((drop) => {
-    if (drop.collected) return;
-    const collector = playerObjs.find((p) => !p.expired && calcDistance(p.pos, drop.pos) < DROP_PICKUP_DISTANCE);
-    if (!collector) return;
-    drop.collected = true;
-    collector.statistics.hitCount = Math.max(0, collector.statistics.hitCount - collector.hitCapacity * DROP_RECHARGE_FRACTION);
   });
 }
 
-function updateObjects() {
-  const allObj = Object.values(gameData.objectsById);
-  const craftObjs = allObj.filter(obj => !obj.isProjectile && !obj.isDrop && !obj.isBlast);
-  const playerObjs = allObj.filter(obj => obj.isPlayer);
-  const robotObjs = allObj.filter(obj => obj.isRobot);
-  const projectiles = allObj.filter(obj => obj.isProjectile);
-  const drops = allObj.filter(obj => obj.isDrop);
+function collectDrops() {
+  world.drops.forEach((drop) => {
+    if (drop.collected) return;
+    for (const player of world.players) {
+      if (player.expired || calcDistance(player.pos, drop.pos) >= DROP_PICKUP_DISTANCE) continue;
+      drop.collected = true;
+      player.statistics.hitCount = Math.max(0, player.statistics.hitCount - player.hitCapacity * DROP_RECHARGE_FRACTION);
+      break;
+    }
+  });
+}
 
-  // const robotProjectiles = allObj.filter(obj => obj.robotProjectile);
-  findClosestPlayerWithinRadius(robotObjs, playerObjs);
-  const neighbors = findNeighbors(robotObjs.filter(robot => !robot.expired));
-  animateRobotPlayers(robotObjs, neighbors);
+const SWEEP = {
+  projectileLifetimeMs: PROJECTILE_LIFETIME,
+  dropLifetimeMs: DROP_LIFETIME,
+  blastDisplayMs: BLAST_DISPLAY_MS,
+  wreckMs: WRECK_MS,
+};
+
+function updateObjects() {
+  const now = Date.now();
+  const robots = findActiveRobots();
+  const neighbors = findNeighbors(robots);
+  animateRobotPlayers(robots, neighbors);
+  const projectiles = Array.from(world.projectiles);
   animateProjectiles(projectiles);
   const explosions = [];
-  updateCraftHitPoints(craftObjs, projectiles, explosions);
+  updateCraftHitPoints(projectiles, explosions);
   // Fighters flying through each other hurt both; nobody gets a kill for it (the "killer" is the craft itself).
-  const now = Date.now();
   robotsToDamage(neighbors, now).forEach(({ robot, amount }) => {
     if (!robot.expired) damageCraft(robot, amount, robot, now, explosions);
   });
-  detonateWrecks(craftObjs, explosions);
-  collectDrops(playerObjs, drops);
-  removeExpiredObjects(allObj); // must be last
-
-  gameData.objectsById = {
-    ...gameData.objectsById,
-    ...gameData.robotProjectiles,
-    ...gameData.newObjects,
-  };
-  gameData.robotProjectiles = {};
-  gameData.newObjects = {};
-  return { playerObjs, robotObjs, projectiles };
-}
-
-function filterOutTooFar(player, allObs) {
-  return allObs.reduce((sum, obj) => {
-    const dist = calcDistance(player.pos, obj.pos);
-    if (dist < HIDE_OBJS_PAST_RADIUS) {
-      sum[obj.id] = obj;
-    };
-    return sum;
-  }, {});
+  detonateWrecks(explosions);
+  collectDrops();
+  world.sweep(now, SWEEP);
+  world.flushPending();
 }
 
 function renderLoop() {
@@ -616,20 +628,25 @@ function renderLoop() {
     gameData.startOfPeriod = process.hrtime();
   }
 
-  const { playerObjs, robotObjs, projectiles } = updateObjects();
+  updateObjects();
 
   if (lastMsgTime - Date.now() > 1000) {
     isIdle = true;
     clearInterval(batchTimer);
   }
-  const allObs = Object.values(gameData.objectsById);
-  if (Object.keys(gameData.objectsById).length) {
+  if (world.size) {
+    // Compare/encode each object once, then build every player's packet from the shared strings.
+    const frame = beginFrame(world.dynamicObjects(), HIDE_CELL_DEG);
+    const craftNear = (pos, box, fn) => world.forEachCraftNear(pos, box, fn);
     Object.keys(socketConnections).forEach((id) => {
-      if (gameData.objectsById[id]) {
-        const res = filterOutTooFar(gameData.objectsById[id], allObs);
-        socketConnections[id].emit('message-all', res);
-      }
+      const player = world.get(id);
+      if (!player) return;
+      const socket = socketConnections[id];
+      const packet = buildPacket(socket.data.known, visibleEntries(frame, player.pos, HIDE_OBJS_PAST_RADIUS, craftNear), socket.data.fresh);
+      socket.data.fresh = false;
+      if (packet) socket.conn.send(packet);
     });
+    endFrame();
   }
 
   const ms = process.hrtime(frameTime)[1] / 1000000;
@@ -639,9 +656,9 @@ function renderLoop() {
     if (duration[0] > 0) {
       console.reset();
       console.info('Configuration', {PORT, FPS, ROBOTS});
-      console.info('Players: %d', playerObjs.length);
-      console.info('Robots: %d', robotObjs.length);
-      console.info('Projectiles: %d', projectiles.length);
+      console.info('Players: %d', world.players.size);
+      console.info('Robots: %d', world.robots.size);
+      console.info('Projectiles: %d', world.projectiles.size);
       console.info('Frame Avg Duration (ms)', gameData.totalSm / gameData.frames);
       console.info('Frames/Second', gameData.frames);
       gameData.startOfPeriod = null;
